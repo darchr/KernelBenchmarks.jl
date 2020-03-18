@@ -7,14 +7,13 @@ val(x::Val) = x
 val(x) = Val(x)
 
 """
-    sequential_read(A::AbstractArray, ::Val{N}, [nontemporal, aligned]
+    sequential_read(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
 
 Perform a sequential read on the contents of `A` using vectors intrinsics of size `N`.
 
-Optional arguments `aligned` and `nontemporal` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are aligned and nontemporal,
+Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
+`Val{False}()` and control if the vector instructions are nontemporal and aligned,
 respectively.
-These arguments default to `Val{False}()`.
 """
 function sequential_read(
         A::AbstractArray{T},
@@ -50,14 +49,13 @@ function sequential_read(
 end
 
 """
-    sequential_write(A::AbstractArray, ::Val{N}; [nontemporal, aligned]
+    sequential_write(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
 
-Perform a sequential write on the contents of `A` using vectors intrinsics of size `N`.
+Perform a sequential read on the contents of `A` using vectors intrinsics of size `N`.
 
-Optional arguments `aligned` and `nontemporal` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are aligned and nontemporal,
+Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
+`Val{False}()` and control if the vector instructions are nontemporal and aligned,
 respectively.
-These arguments default to `Val{False}()`.
 """
 function sequential_write(
         A::AbstractArray{T},
@@ -100,14 +98,13 @@ function sequential_write(
 end
 
 """
-    sequential_readwrite(A::AbstractArray, ::Val{N}; [nontemporal, aligned]
+    sequential_readwrite(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
 
-Perform a sequential read followed by a write on the contents of `A` using vector
-    intrinsics of size `N`.
-Optional arguments `aligned` and `nontemporal` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are aligned and nontemporal,
+Perform a sequential read on the contents of `A` using vectors intrinsics of size `N`.
+
+Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
+`Val{False}()` and control if the vector instructions are nontemporal and aligned,
 respectively.
-These arguments default to `Val{False}()`.
 """
 function sequential_readwrite(
         A::AbstractArray{T},
@@ -153,13 +150,13 @@ end
 #####
 
 """
-    random_read(A::AbstractArray, ::Val{N}, [nontemporal = Val{false}()])
+    random_read(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
 
-Perform a random read the contents of `A` using vector intrinsics of size `N`.
+Perform a random read on the contents of `A` using vectors intrinsics of size `N`.
 
-Optional argument `nontemporal` should be passed as `Val{true}()` or `Val{false}()`
-and controls whether the vector instructions are nontemporal.
-This argument defaults to `Val{false}()`.
+Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
+`Val{False}()` and control if the vector instructions are nontemporal and aligned,
+respectively.
 """
 function random_read(
         A::AbstractArray{T},
@@ -203,13 +200,13 @@ function random_read(
 end
 
 """
-    random_write(A::AbstractArray, ::Val{N}, [nontemporal = Val{false}()])
+    random_write(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
 
-Perform a random write the contents of `A` using vector intrinsics of size `N`.
+Perform a random read on the contents of `A` using vectors intrinsics of size `N`.
 
-Optional argument `nontemporal` should be passed as `Val{true}()` or `Val{false}()`
-and controls whether the vector instructions are nontemporal.
-This argument defaults to `Val{false}()`.
+Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
+`Val{False}()` and control if the vector instructions are nontemporal and aligned,
+respectively.
 """
 function random_write(
         A::AbstractArray{T},
@@ -248,13 +245,13 @@ function random_write(
 end
 
 """
-    random_write(A::AbstractArray, ::Val{N}, [nontemporal = Val{false}()])
+    random_write(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
 
-Perform a random write the contents of `A` using vector intrinsics of size `N`.
+Perform a random read on the contents of `A` using vectors intrinsics of size `N`.
 
-Optional argument `nontemporal` should be passed as `Val{true}()` or `Val{false}()`
-and controls whether the vector instructions are nontemporal.
-This argument defaults to `Val{false}()`.
+Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
+`Val{False}()` and control if the vector instructions are nontemporal and aligned,
+respectively.
 """
 function random_readwrite(
         A::AbstractArray{T},

@@ -99,9 +99,32 @@ Use that package to create the array `A`.
 
 Below summarizes the test kernels in this repository.
 
-### `sequential_read`
-### `sequential_write`
-### `sequential_readwrite`
-### `random_read`
-### `random_write`
-### `random_readwrite`
+### API 1:
+Kernels: `sequential_read`, `sequential_write`, `sequential_readwrite`, `random_read`, `random_write`, `random_readwrite`
+
+All kernels have the following positional arguments
+
+Mandatory
+=========
+
+- `A`: An `AbstractArray` with some primitive type, such as `Float32` or `Float64`.
+- `vector_size`: An argument of the form `Val{N}()` where `N` is some integer.
+    This represents the number of elements of `A` to collect together into a x86 vector intrinsic.
+    Valid sizes depend on `eltype(A)`, but correspond to 128b, 256b, or 512b vector instructions.
+
+Optional
+========
+
+- `nontemporal`: Compile-time flag to emit non-temporal loads or stores.
+    If `nontemporal == Val{true}()`, then non-temporal instructions will be used.
+    Otherwise, standard load/stores will be used.
+    Default: `Val{false}()`.
+
+- `aligned`: Compile-time flag to emit aligned loads and stores.
+    If `aligned == Val{true}()`, then the vector load/store instrinsics will be aligned.
+    Otherwise, unaligned instructions will be used.
+    Default: `Val{true}()`.
+
+    **NOTE**: This could lead to crashes if the base of `A` is not properly aligned.
+    The code **should** check for this, but I can't guarentee that this won't happen.
+
