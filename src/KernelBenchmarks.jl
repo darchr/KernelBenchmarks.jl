@@ -1,5 +1,21 @@
 module KernelBenchmarks
 
-greet() = print("Hello World!")
+##### stdlib
+using InteractiveUtils
+
+##### "Internal" Packages
+# These are packages I've developed for testing purposes and not part of the
+# greater Julia ecosystem.
+using MaxLFSR
+
+##### External Packages
+
+# For vector load intrinsics
+using SIMD
+
+include("threaded.jl")
+include("kernels.jl")
+include("cachesmasher.jl")
+include("introspection.jl")
 
 end # module
