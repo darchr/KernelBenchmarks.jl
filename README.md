@@ -104,16 +104,14 @@ Kernels: `sequential_read`, `sequential_write`, `sequential_readwrite`, `random_
 
 All kernels have the following positional arguments
 
-Mandatory
-=========
+#### Mandatory
 
 - `A`: An `AbstractArray` with some primitive type, such as `Float32` or `Float64`.
 - `vector_size`: An argument of the form `Val{N}()` where `N` is some integer.
     This represents the number of elements of `A` to collect together into a x86 vector intrinsic.
     Valid sizes depend on `eltype(A)`, but correspond to 128b, 256b, or 512b vector instructions.
 
-Optional
-========
+#### Optional
 
 - `nontemporal`: Compile-time flag to emit non-temporal loads or stores.
     If `nontemporal == Val{true}()`, then non-temporal instructions will be used.
