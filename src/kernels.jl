@@ -184,7 +184,7 @@ end
 
 function random_read(
         A::AbstractArray{Vec{N,T}},
-        lfsr,
+        lfsr::LFSR,
         nontemporal = Val(false),
         aligned = Val(true),
     ) where {N,T}
@@ -230,7 +230,7 @@ end
 
 function random_write(
         A::AbstractArray{Vec{N,T}},
-        lfsr,
+        lfsr::LFSR,
         nontemporal = Val(false),
         aligned = Val(true),
     ) where {N,T}
@@ -276,7 +276,7 @@ end
 
 function random_readwrite(
         A::AbstractArray{Vec{N,T}},
-        lfsr,
+        lfsr::LFSR,
         nontemporal = Val(false),
         aligned = Val(true),
     ) where {N,T}
