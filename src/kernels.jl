@@ -163,40 +163,60 @@ function random_read(
         ::Val{N},
         nontemporal = Val(false),
         aligned = Val(true),
+        unroll = Val(1),
     ) where {T,N}
 
     # Wrap the array in "Vec" elements.
     # This really becomes a no-op, but is helpful for not having to deal with it in the
     # inner kernel.
-    return random_read(reinterpret(Vec{N,T}, A), nontemporal, aligned)
+    return random_read(reinterpret(Vec{N,T}, A), nontemporal, aligned, unroll)
 end
 
 function random_read(
         A::AbstractArray{T},
         nontemporal::Val{N} = Val(false),
         aligned = Val(true),
-    ) where {T <: Vec, N}
+        u::Val{unroll} = Val(1),
+    ) where {T <: Vec, N, unroll}
+
+    # Make sure we can the length of the array is a multiple of the unroll factor
+    if !iszero(mod(length(A), unroll))
+        error("Length of `A` must be a multiple of the unroll factor $unroll")
+    end
 
     # Construct a LFSR
-    lfsr = MaxLFSR.LFSR(length(A))
-    return random_read(A, lfsr, nontemporal, aligned)
+    lfsr = MaxLFSR.LFSR(div(length(A), unroll))
+    return random_read(A, lfsr, nontemporal, aligned, u)
 end
 
-function random_read(
+@generated function random_read(
         A::AbstractArray{Vec{N,T}},
         lfsr::LFSR,
         nontemporal = Val(false),
         aligned = Val(true),
-    ) where {N,T}
+        ::Val{unroll} = Val(1),
+    ) where {N,T,unroll}
 
-    s = zero(eltype(A))
-    base = Base.unsafe_convert(Ptr{T}, pointer(A))
-    @inbounds for i in lfsr
-        ptr = base + sizeof(eltype(A)) * (i-1)
-        v = vload(Vec{N,T}, ptr, aligned, nontemporal)
-        s += v
+    syms = [Symbol("v$i") for i in 1:unroll]
+
+    loads = map(1:unroll) do i
+        lhs = syms[i]
+        return :($lhs = vload(Vec{$N,$T}, ptr + $(sizeof(Vec{N,T}) * (i-1)), aligned, nontemporal))
     end
-    return s
+
+    # Need to manually check if length is 1 for better codegen.
+    reduction = length(syms) == 1 ? :(s += $(syms[1])) : :(s += +($(syms...)))
+
+    return quote
+        s = zero(eltype(A))
+        base = Base.unsafe_convert(Ptr{T}, pointer(A))
+        @inbounds for i in lfsr
+            ptr = base + $(unroll * sizeof(eltype(A))) * (i-1)
+            $(loads...)
+            $reduction
+        end
+        return s
+    end
 end
 
 """
@@ -213,39 +233,54 @@ function random_write(
         ::Val{N},
         nontemporal = Val{false}(),
         aligned = Val(true),
+        unroll = Val(1),
     ) where {T,N}
 
-    return random_write(reinterpret(Vec{N,T}, A), nontemporal, aligned)
+    return random_write(reinterpret(Vec{N,T}, A), nontemporal, aligned, unroll)
 end
 
 function random_write(
         A::AbstractArray{T},
         nontemporal::Val{N} = Val{false}(),
         aligned = Val(true),
-    ) where {T <: Vec, N}
+        u::Val{unroll} = Val(1),
+    ) where {T <: Vec, N, unroll}
+
+    # Make sure we can the length of the array is a multiple of the unroll factor
+    if !iszero(mod(length(A), unroll))
+        error("Length of `A` must be a multiple of the unroll factor $unroll")
+    end
+
     # Construct a LFSR
-    lfsr = MaxLFSR.LFSR(length(A))
-    return random_write(A, lfsr, nontemporal, aligned)
+    lfsr = MaxLFSR.LFSR(div(length(A), unroll))
+    return random_write(A, lfsr, nontemporal, aligned, u)
 end
 
-function random_write(
+@generated function random_write(
         A::AbstractArray{Vec{N,T}},
         lfsr::LFSR,
         nontemporal = Val(false),
         aligned = Val(true),
-    ) where {N,T}
+        ::Val{unroll} = Val(1),
+    ) where {N,T,unroll}
 
-    s = zero(eltype(A))
-    base = Base.unsafe_convert(Ptr{T}, pointer(A))
-    @inbounds for i in lfsr
-        ptr = base + sizeof(eltype(A)) * (i-1)
-        vstore(s, ptr, aligned, nontemporal)
+    stores = map(1:unroll) do i
+        :(vstore(s, ptr + $(sizeof(Vec{N,T}) * (i-1)), aligned, nontemporal))
     end
-    return nothing
+
+    return quote
+        s = zero(eltype(A))
+        base = Base.unsafe_convert(Ptr{T}, pointer(A))
+        @inbounds for i in lfsr
+            ptr = base + $(unroll * sizeof(Vec{N,T})) * (i-1)
+            $(stores...)
+        end
+        return nothing
+    end
 end
 
 """
-    random_write(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
+    random_readwrite(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
 
 Perform a random read on the contents of `A` using vectors intrinsics of size `N`.
 
@@ -258,34 +293,58 @@ function random_readwrite(
         ::Val{N},
         nontemporal = Val(false),
         aligned = Val(true),
+        unroll = Val(1),
     ) where {T,N}
 
-    return random_readwrite(reinterpret(Vec{N,T}, A), nontemporal, aligned)
+    return random_readwrite(reinterpret(Vec{N,T}, A), nontemporal, aligned, unroll)
 end
 
 function random_readwrite(
         A::AbstractArray{T},
         nontemporal::Val{N} = Val(false),
         aligned = Val(true),
-    ) where {T <: Vec, N}
+        u::Val{unroll} = Val(1),
+    ) where {T <: Vec, N, unroll}
+
+    # Make sure we can the length of the array is a multiple of the unroll factor
+    if !iszero(mod(length(A), unroll))
+        error("Length of `A` must be a multiple of the unroll factor $unroll")
+    end
 
     # Construct a LFSR
-    lfsr = MaxLFSR.LFSR(length(A))
-    return random_readwrite(A, lfsr, nontemporal, aligned)
+    lfsr = MaxLFSR.LFSR(div(length(A), unroll))
+    return random_readwrite(A, lfsr, nontemporal, aligned, u)
 end
 
-function random_readwrite(
+@generated function random_readwrite(
         A::AbstractArray{Vec{N,T}},
         lfsr::LFSR,
         nontemporal = Val(false),
         aligned = Val(true),
-    ) where {N,T}
+        ::Val{unroll} = Val(1),
+    ) where {N,T,unroll}
 
-    base = Base.unsafe_convert(Ptr{T}, pointer(A))
-    @inbounds for i in lfsr
-        ptr = base + sizeof(eltype(A)) * (i-1)
-        v = vload(Vec{N,T}, ptr, aligned, nontemporal)
-        vstore(v + one(eltype(A)), ptr, aligned, nontemporal)
+    o = one(Vec{N,T})
+    syms = [Symbol("v$i") for i in 1:unroll]
+    loads = map(1:unroll) do i
+        lhs = syms[i]
+        shift = sizeof(Vec{N,T}) * (i-1)
+        return :($lhs = vload(Vec{$N,$T}, ptr + $shift, aligned, nontemporal))
+    end
+
+    stores = map(1:unroll) do i
+        v = syms[i]
+        shift = sizeof(Vec{N,T}) * (i-1)
+        return :(vstore($v+$o, ptr + $shift, aligned, nontemporal))
+    end
+
+    return quote
+        base = Base.unsafe_convert(Ptr{T}, pointer(A))
+        @inbounds for i in lfsr
+            ptr = base + $(unroll * sizeof(Vec{N,T})) * (i-1)
+            $(loads...)
+            $(stores...)
+        end
     end
 end
 

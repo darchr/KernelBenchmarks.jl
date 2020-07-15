@@ -1,3 +1,5 @@
+supports_unrolling(f) = in(f, (random_read, random_write, random_readwrite))
+
 # Introspection for kernel benchmarks to see native code.
 function introspect(A = nothing)
     # Kernel Selection
@@ -79,15 +81,31 @@ function introspect(A = nothing)
     checkexit(choice) && return nothing
     aligned = last(options[choice])
 
+    # If this function supports unrolling, make this an option.
+    extra_args = []
+    if supports_unrolling(fn)
+        options = [
+            "1" => Val(1),
+            "2" => Val(2),
+            "4" => Val(4),
+            "8" => Val(8),
+        ]
+
+        menu = RadioMenu(first.(options); pagesize = 10)
+        choice = request("Unroll Kernel? ", menu)
+        checkexit(choice) && return nothing
+        push!(extra_args, last(options[choice]))
+    end
+
     # Now that we have everything ready to go, we create the appropriate calls to the
     # innermost kernels.
-    generate_code_native_call(fn, A, vectorsize, nontemporal, aligned)
+    generate_code_native_call(fn, A, vectorsize, nontemporal, aligned, extra_args...)
 end
 
 checkexit(x) = (x == -1)
 
 unpack(::Val{N}) where {N} = N
-function generate_code_native_call(f, A, vectorsize, nontemporal, aligned)
+function generate_code_native_call(f, A, vectorsize, nontemporal, aligned, extra_args...)
     # No reason to specialize on these arguments
     @nospecialize f A vectorsize nontemporal aligned
 
@@ -95,7 +113,7 @@ function generate_code_native_call(f, A, vectorsize, nontemporal, aligned)
     # directly
     if in(f, (sequential_read, sequential_write, sequential_readwrite))
         types = typeof.((A, vectorsize, nontemporal, aligned))
-        return native_call(f, (A, vectorsize, nontemporal, aligned))
+        return native_call(f, (A, vectorsize, nontemporal, aligned, extra_args...))
     end
 
     # If `f` is one of the random benchmarks, we have to create an LFSR in order to
@@ -104,13 +122,14 @@ function generate_code_native_call(f, A, vectorsize, nontemporal, aligned)
         # Wrap up A in a reinterpreted view and create the LFSR
         V = reinterpret(Vec{unpack(vectorsize),eltype(A)}, A)
         lfsr = MaxLFSR.LFSR(length(V))
-        return native_call(f, (V, lfsr, nontemporal, aligned))
+        return native_call(f, (V, lfsr, nontemporal, aligned, extra_args...))
     end
 end
 
 function native_call(f, args)
     @nospecialize f args
     types = typeof.(args)
+    @show types
     call = """
         code_native(KernelBenchmarks.$f, $types; syntax=:intel, debuginfo=:none)
     """

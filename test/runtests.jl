@@ -64,3 +64,18 @@ end
     code_native(devnull, KernelBenchmarks.random_write, types; kw...)
     code_native(devnull, KernelBenchmarks.random_readwrite, types; kw...)
 end
+
+@testset "Testing Coverage" begin
+    for unroll in (1,2,4,8)
+        A = ones(Float32, 2^10)
+        KernelBenchmarks.random_write(A, Val(8), Val(false), Val(true), Val(unroll))
+        @test all(iszero, A)
+    end
+
+    for unroll in (1,2,4,8)
+        A = zeros(Float32, 2^10)
+        KernelBenchmarks.random_readwrite(A, Val(8), Val(false), Val(true), Val(unroll))
+        @test all(isone, A)
+    end
+end
+
