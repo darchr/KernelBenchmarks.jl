@@ -86,7 +86,7 @@ function sequential_write(
     # conversions, even though these are really not needed.
     #
     # Instead, we perform the pointer arithmetic manually.
-    s = Vec{N,T}(zero(T))
+    s = Vec{N,T}(one(T))
     base = pointer(A)
     @inbounds for i in 0:(unroll*N):(length(A) - 1)
         vstore(s, base + sizeof(T) * i,           aligned, nontemporal)
@@ -269,7 +269,7 @@ end
     end
 
     return quote
-        s = zero(eltype(A))
+        s = one(eltype(A))
         base = Base.unsafe_convert(Ptr{T}, pointer(A))
         @inbounds for i in lfsr
             ptr = base + $(unroll * sizeof(Vec{N,T})) * (i-1)
