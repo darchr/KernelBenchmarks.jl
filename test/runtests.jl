@@ -69,7 +69,7 @@ end
     for unroll in (1,2,4,8)
         A = ones(Float32, 2^10)
         KernelBenchmarks.random_write(A, Val(8), Val(false), Val(true), Val(unroll))
-        @test all(iszero, A)
+        @test all(isone, A)
     end
 
     for unroll in (1,2,4,8)

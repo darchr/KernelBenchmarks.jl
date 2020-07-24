@@ -3,9 +3,32 @@
 [[Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 
+[[CounterTools]]
+deps = ["Distributed", "Libdl"]
+git-tree-sha1 = "c25cf569f1f7e93794106ffacb1687fcd1c42186"
+repo-rev = "master"
+repo-url = "https://github.com/hildebrandmw/CounterTools.jl"
+uuid = "14d5c891-3eb4-4046-b085-be47e3b93327"
+version = "0.1.0"
+
+[[Distributed]]
+deps = ["Random", "Serialization", "Sockets"]
+uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+
+[[HugepageMmap]]
+deps = ["Mmap"]
+git-tree-sha1 = "2be9e0b58642a22133b4581bf75d539c14314ef4"
+repo-rev = "master"
+repo-url = "https://github.com/hildebrandmw/HugepageMmap.jl"
+uuid = "ee95d29b-bb10-4127-aa09-5a5a9fa6956a"
+version = "0.1.0"
+
 [[InteractiveUtils]]
 deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+
+[[Libdl]]
+uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 
 [[Markdown]]
 deps = ["Base64"]
@@ -18,9 +41,26 @@ repo-url = "https://github.com/hildebrandmw/MaxLFSR.jl"
 uuid = "baf6eaea-5535-433e-9234-5dfb57c28f99"
 version = "0.1.0"
 
+[[Mmap]]
+uuid = "a63ad114-7e13-5084-954f-fe012c677804"
+
+[[Printf]]
+deps = ["Unicode"]
+uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+[[ProgressMeter]]
+deps = ["Distributed", "Printf"]
+git-tree-sha1 = "2de4cddc0ceeddafb6b143b5b6cd9c659b64507c"
+uuid = "92933f4c-e287-5a05-a399-4b506db050ca"
+version = "1.3.2"
+
 [[REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
+
+[[Random]]
+deps = ["Serialization"]
+uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [[SIMD]]
 deps = ["InteractiveUtils"]
@@ -28,5 +68,11 @@ git-tree-sha1 = "603b6513b60a87574f77616ac4b0c9b206afaf58"
 uuid = "fdea26ae-647d-5447-a871-4b548cad5224"
 version = "2.8.0"
 
+[[Serialization]]
+uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+
 [[Sockets]]
 uuid = "6462fe0b-24de-5631-8697-dd941f90decc"
+
+[[Unicode]]
+uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"

@@ -4,8 +4,11 @@ authors = ["Mark Hildebrand <mhildebrand@ucdavis.edu>"]
 version = "0.1.0"
 
 [deps]
+CounterTools = "14d5c891-3eb4-4046-b085-be47e3b93327"
+HugepageMmap = "ee95d29b-bb10-4127-aa09-5a5a9fa6956a"
 InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 MaxLFSR = "baf6eaea-5535-433e-9234-5dfb57c28f99"
+ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 REPL = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 SIMD = "fdea26ae-647d-5447-a871-4b548cad5224"
 

@@ -17,7 +17,7 @@ using SIMD
 
 include("threaded.jl")
 include("kernels.jl")
-include("cachesmasher.jl")
 include("introspection.jl")
+include("updated.jl")
 
 end # module
