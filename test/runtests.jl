@@ -1,68 +1,169 @@
 using KernelBenchmarks
 using Test
 
-# Required for Codegen Test
-using InteractiveUtils
+using Cassette
 using SIMD
-using MaxLFSR
+import ProgressMeter
 
-@testset "KernelBenchmarks.jl" begin
-    # Write your own tests here.
+# Setup a Cassette Context that records `vload` and `vstore` options.
+Cassette.@context TraceCtx
 
-    A = rand(Float32, 100000 * Threads.nthreads())
-
-    iterations = 10
-
-    # Standard loads/stores
-    args = (A, Val{8}(), Val{false}())
-    kw = (iterations = iterations,)
-
-    println("Sequential Read")
-    KernelBenchmarks.threaded(KernelBenchmarks.sequential_read, args...; kw...)
-    println("Sequential Write")
-    KernelBenchmarks.threaded(KernelBenchmarks.sequential_write, args...; kw...)
-    println("Sequential ReadWrite")
-    KernelBenchmarks.threaded(KernelBenchmarks.sequential_readwrite, args...; kw...)
-
-    println("Random Read")
-    KernelBenchmarks.threaded(KernelBenchmarks.random_read, args...; kw...)
-    println("Random Write")
-    KernelBenchmarks.threaded(KernelBenchmarks.random_write, args...; kw...)
-    println("Random ReadWrite")
-    KernelBenchmarks.threaded(KernelBenchmarks.random_readwrite, args...; kw...)
-
-    # Nontemporal loads/stores
-    args = (A, Val{8}(), Val{true}())
-    kw = (iterations = iterations,)
-
-    println("Sequential Read")
-    KernelBenchmarks.threaded(KernelBenchmarks.sequential_read, args...; kw...)
-    println("Sequential Write")
-    KernelBenchmarks.threaded(KernelBenchmarks.sequential_write, args...; kw...)
-    println("Sequential ReadWrite")
-    KernelBenchmarks.threaded(KernelBenchmarks.sequential_readwrite, args...; kw...)
-
-    println("Random Read")
-    KernelBenchmarks.threaded(KernelBenchmarks.random_read, args...; kw...)
-    println("Random Write")
-    KernelBenchmarks.threaded(KernelBenchmarks.random_write, args...; kw...)
-    println("Random ReadWrite")
-    KernelBenchmarks.threaded(KernelBenchmarks.random_readwrite, args...; kw...)
+function Cassette.overdub(ctx::TraceCtx, ::typeof(SIMD.vload), x...)
+    push!(ctx.metadata.loads, x)
+    return SIMD.vload(x...)
 end
 
-@testset "Testing Codegen" begin
-    # Here, we just emit a lot of the codegen to catch if anything goes out of date.
+function Cassette.overdub(ctx::TraceCtx, ::typeof(SIMD.vstore), x...)
+    push!(ctx.metadata.stores, x)
+    return SIMD.vstore(x...)
+end
 
-    types = (SubArray{Float32,1,Array{Float32,1},Tuple{UnitRange{Int64}},true}, Val{8}, Val{true}, Val{true})
-    kw = (syntax = :intel, debuginfo = :none)
-    code_native(devnull, KernelBenchmarks.sequential_read, types; kw...)
-    code_native(devnull, KernelBenchmarks.sequential_write, types; kw...)
-    code_native(devnull, KernelBenchmarks.sequential_readwrite, types; kw...)
+struct TraceMeta
+    loads::Vector{Any}
+    stores::Vector{Any}
+end
+TraceMeta() = TraceMeta(Any[], Any[])
 
-    types = (Base.ReinterpretArray{Vec{8,Float64},1,Float64,SubArray{Float64,1,Array{Float64,1},Tuple{UnitRange{Int64}},true}}, LFSR, Val{true}, Val{true})
-    code_native(devnull, KernelBenchmarks.random_read, types; kw...)
-    code_native(devnull, KernelBenchmarks.random_write, types; kw...)
-    code_native(devnull, KernelBenchmarks.random_readwrite, types; kw...)
+function pointercheck(pointers, vectype, unroll, iter, A)
+    # Are all pointers unique?
+    @test allunique(pointers)
+
+    # Are they grouped by the unroll amount?
+    for group in Iterators.partition(pointers, unroll)
+        @test all(isequal(sizeof(vectype)), diff(group))
+    end
+
+    # If the iterator is Sequential, then the pointers should be sorted.
+    # Otherwise, they shouldn't be sorted.
+    if iter == KernelBenchmarks.Sequential
+        @test issorted(pointers)
+    elseif iter == KernelBenchmarks.PseudoRandom
+        @test !issorted(pointers)
+    # Throw an error to try to keep this test from breaking.
+    else
+        error()
+    end
+
+    # Generate all of the addresses we'd expect to write.
+    base = convert(Int, pointer(A))
+    len = div(sizeof(A), sizeof(vectype))
+    expected = [base + sizeof(vectype) * (i-1) for i in 1:len]
+    @test sort(pointers) == expected
+end
+
+#####
+##### Test Set
+#####
+
+@testset "KernelBenchmarks.jl" begin
+    # Test over a very large range of parameters.
+    # I'm sorry Julia compiler :(
+
+    # Allocate a decent size array to serve as our test bed.
+    A = rand(Float32, 2^11)
+    B = rand(Float64, 2^10)
+
+    # Setup iteration space
+    kernels = [ReadOnly, WriteOnly, ReadWrite]
+    loadtypes = [Standard, Nontemporal]
+    storetypes = [Standard, Nontemporal]
+    iterators = [Sequential, PseudoRandom]
+    eltypes = [Float32, Float64]
+    widths = [1,2,4,8,16]
+    unroll = [1,2,4,8]
+
+    iter = Iterators.product(
+        kernels,
+        loadtypes,
+        storetypes,
+        iterators,
+        eltypes,
+        widths,
+        unroll
+    )
+
+    ProgressMeter.@showprogress 1 "Testing ... " for tup in iter
+        # unpack tuple
+        kernel      = tup[1]
+        loadtype    = tup[2]
+        storetype   = tup[3]
+        iterator    = tup[4]
+        eltype      = tup[5]
+        vectorsize  = tup[6]
+        unroll      = tup[7]
+
+        # Invalid combination
+        eltype == Float64 && unroll == 16 && continue
+
+        kp = KernelBenchmarks.KernelParam(
+            kernel = kernel,
+            loadtype = loadtype,
+            storetype = storetype,
+            iterator = iterator,
+            eltype = eltype,
+            vectorsize = vectorsize,
+            unroll = unroll,
+        )
+
+        V = eltype == Float32 ? A : B
+
+        # Get a record of all the stores
+        ctx = TraceCtx(metadata = TraceMeta())
+        Cassette.overdub(ctx, KernelBenchmarks.execute!, V, kp)
+        trace = ctx.metadata
+
+        ### Setup
+        vectype = Vec{vectorsize,eltype}
+        loads = trace.loads
+        stores = trace.stores
+
+        if kernel == ReadOnly
+            @test isempty(stores)
+        elseif kernel == WriteOnly
+            @test isempty(loads)
+        elseif kernel == ReadWrite
+            @test length(stores) == length(loads)
+        end
+
+        # Check load type
+        if in(kernel, (ReadOnly, ReadWrite))
+            # Are all the loads the correct vector type
+            @test all(isequal(vectype), getindex.(loads, 1))
+
+            # All loads should be aligned
+            @test all(isequal(Val(true)), getindex.(loads, 3))
+
+            # Test for standard/nontemporal stores
+            if loadtype == KernelBenchmarks.Standard
+                @test all(isequal(Val(false)), getindex.(loads, 4))
+            else
+                @test all(isequal(Val(true)), getindex.(loads, 4))
+            end
+
+            # Pointer Check
+            pointers = convert.(Int, getindex.(loads, 2))
+            pointercheck(pointers, vectype, unroll, iterator, V)
+        end
+
+        if in(kernel, (WriteOnly, ReadWrite))
+            # Are all the stores the correct vector type
+            @test all(isequal(vectype), typeof.(getindex.(stores, 1)))
+
+            # All stores should be aligned
+            @test all(isequal(Val(true)), getindex.(stores, 3))
+
+            # Test for standard/nontemporal stores
+            if storetype == KernelBenchmarks.Standard
+                @test all(isequal(Val(false)), getindex.(stores, 4))
+            else
+                @test all(isequal(Val(true)), getindex.(stores, 4))
+            end
+
+            # Pointer Check
+            pointers = convert.(Int, getindex.(stores, 2))
+            pointercheck(pointers, vectype, unroll, iterator, V)
+        end
+    end
 end
 
 @testset "Testing Coverage" begin

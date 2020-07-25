@@ -1,3 +1,199 @@
+# Kernel Type
+abstract type AbstractKernelType end
+struct ReadOnly <: AbstractKernelType end
+struct WriteOnly <: AbstractKernelType end
+struct ReadWrite <: AbstractKernelType end
+
+# LoadStoreType
+abstract type AbstractLoadStoreType end
+struct Standard <: AbstractLoadStoreType end
+struct Nontemporal <: AbstractLoadStoreType end
+
+# Iteration Style
+abstract type AbstractIterationStyle end
+struct Sequential <: AbstractIterationStyle end
+struct PseudoRandom <: AbstractIterationStyle end
+
+struct KernelParam{
+        # Kernel Type
+        K <: AbstractKernelType,
+        # Load Type
+        L <: AbstractLoadStoreType,
+        # Store Type
+        S <: AbstractLoadStoreType,
+        # Iteration Style
+        I <: AbstractIterationStyle,
+        # Vector element Type
+        T,
+        # Vector Width (bytes)
+        N,
+        # Unroll factor
+        U
+    }
+
+    function KernelParam(;
+            kernel = ReadOnly,
+            loadtype = Standard,
+            storetype = Standard,
+            iterator = Sequential,
+            eltype = Float32,
+            vectorsize = 8,
+            unroll = 1
+        )
+
+        return new{kernel,loadtype,storetype,iterator,eltype,vectorsize,unroll}()
+    end
+end
+
+# Convenience accessors
+kernel(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = K
+kernel(K::KernelParam) = kernel(typeof(K))
+
+loadtype(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = L
+loadtype(K::KernelParam) = loadtype(typeof(K))
+
+storetype(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = S
+storetype(K::KernelParam) = storetype(typeof(K))
+
+iterator(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = I
+iterator(K::KernelParam) = iterator(typeof(K))
+
+Base.eltype(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = T
+Base.eltype(K::KernelParam) = eltype(typeof(K))
+
+vectorsize(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = N
+vectorsize(K::KernelParam) = vectorsize(typeof(K))
+
+unroll(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = U
+unroll(K::KernelParam) = unroll(typeof(K))
+
+#####
+##### Upper level handling
+#####
+
+# The upper level functions reinterpret the top level array as an array of `Vec` elements.
+# Performs alignment checking and length checking.
+# Constructs the iterator
+function execute!(A::AbstractVector, K::KernelParam)
+    # Sanity check
+    @assert eltype(A) == eltype(K)
+    # Alignment check
+    @assert iszero(mod(convert(Int, pointer(A)), 64))
+    # Size check
+    @assert iszero(mod(length(A), unroll(K) * sizeof(eltype(K)) * vectorsize(K)))
+
+    V = reinterpret(K, A)
+    itr = makeitr(V, K)
+
+    # Inner high-performance function.
+    return _execute!(V, itr, K)
+end
+
+Base.reinterpret(K::KernelParam, A::AbstractArray) = reinterpret(Vec{vectorsize(K),eltype(K)}, A)
+
+# iterators
+makeitr(A, K::KernelParam) = makeitr(A, iterator(K), unroll(K))
+
+makeitr(A, ::Type{Sequential}, unroll) = 1:div(length(A), unroll)
+makeitr(A, ::Type{PseudoRandom}, unroll) = MaxLFSR.LFSR(div(length(A), unroll))
+
+#####
+##### Generate the kernel
+#####
+
+# Note: This is not exactly an extendable API since we're relying on `@generated` functions.
+# In particular, in order for any changes made to the `hbf` function or any functions
+# called within to take effect, we need to restart Julia.
+#
+# This is a limitation of the dependency tracking in Julia.
+@generated function _execute!(A::AbstractArray{Vec{N,T}}, itr, K::KernelParam) where {N,T}
+    return emit(A, K)
+end
+
+function emit(A::Type{<:AbstractArray{Vec{N,T}}}, K::Type{<:KernelParam}) where {N,T}
+    # Get the header, body, and footer for this kernel
+    header, body, footer = hbf(A, K)
+
+    # Emit the rest of the function
+    return quote
+        $(header...)
+        base = Base.unsafe_convert(Ptr{$T}, pointer(A))
+        @inbounds for i in itr
+            ptr = base + $(unroll(K) * sizeof(Vec{N,T})) * (i-1)
+            $(body...)
+        end
+        $(footer...)
+    end
+end
+
+# header, body, footer
+function hbf(::Type{<:AbstractArray{Vec{N,T}}}, K::Type{<:KernelParam}) where {N,T}
+    # Check invariants
+    @assert N == vectorsize(K)
+    @assert T == eltype(K)
+
+    lt = loadtype(K)
+    st = storetype(K)
+
+    # defaults
+    header = Any[]
+    footer = Any[:(return nothing)]
+
+    # Check if we need to emit loads/stores
+    if kernel(K) == ReadOnly
+        # Header
+        header = push!(header, :(s = zero(eltype(A))))
+
+        # Body
+        body = emit_loads(Vec{N,T}, unroll(K), loadtype(K))
+        reduction = unroll(K) == 1 ? :(s += $(symbols(1)[1])) : :(s += +($(symbols(unroll(K))...)))
+        push!(body, reduction)
+
+        # footer
+        footer = Any[:(return s)]
+    elseif kernel(K) == WriteOnly
+        # body
+        body = emit_stores(Vec{N,T}, unroll(K), storetype(K), false)
+    elseif kernel(K) == ReadWrite
+        # body
+        loads = emit_loads(Vec{N,T}, unroll(K), loadtype(K))
+        stores = emit_stores(Vec{N,T}, unroll(K), storetype(K), true)
+        body = vcat(loads, stores)
+    else
+        error("Unknown Kernel: $(kernel(K))")
+    end
+
+    return header, body, footer
+end
+
+symbols(N) = [Symbol("v$i") for i in 1:N]
+lower(::Type{Nontemporal}) = Val{true}()
+lower(::Type{Standard}) = Val{false}()
+
+function emit_loads(vectype::Type{<:Vec}, unroll, loadtype)
+    @nospecialize
+
+    syms = symbols(unroll)
+    return map(1:unroll) do i
+        lhs = syms[i]
+        shift = sizeof(vectype) * (i-1)
+        return :($lhs = vload($vectype, ptr + $shift, Val{true}(), $(lower(loadtype))))
+    end
+end
+
+function emit_stores(vectype::Type{<:Vec}, unroll, storetype, follows_load::Bool)
+    @nospecialize
+
+    syms = symbols(unroll)
+    o = one(vectype)
+    return map(1:unroll) do i
+        rhs = syms[i]
+        shift = sizeof(vectype) * (i-1)
+        vec = follows_load ? :($rhs + $o) : o
+        return :(vstore($vec, ptr + $shift, Val{true}(), $(lower(storetype))))
+    end
+end
+
 #####
 ##### Sequential Access Kernels
 #####
@@ -22,30 +218,15 @@ function sequential_read(
         aligned = Val(true),
     ) where {T, N}
 
-    aligned = val(aligned)
-    nontemporal = val(nontemporal)
-
-    unroll = 4
-
-    # Make sure we can successfully chunk up this array into SIMD sizes
-    @assert iszero(mod(length(A), unroll * N))
-
-    # If we've passed alignment flags, make sure the base pointer of this array is in fact
-    # aligned correctly.
-    if aligned == Val{true}()
-        @assert iszero(mod(Int(pointer(A)), sizeof(T) * N))
-    end
-
-    s = Vec{N,T}(zero(T))
-    @inbounds for i in 1:(unroll*N):length(A)
-        _v1 = vload(Vec{N,T}, pointer(A, i),         aligned, nontemporal)
-        _v2 = vload(Vec{N,T}, pointer(A, i + N),     aligned, nontemporal)
-        _v3 = vload(Vec{N,T}, pointer(A, i + 2 * N), aligned, nontemporal)
-        _v4 = vload(Vec{N,T}, pointer(A, i + 3 * N), aligned, nontemporal)
-
-        s += _v1 + _v2 + _v3 + _v4
-    end
-    return sum(s)
+    kp = KernelParam(;
+        kernel = ReadOnly,
+        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
+        eltype = T,
+        iterator = Sequential,
+        vectorsize = N,
+        unroll = 4
+    )
+    return execute!(A, kp)
 end
 
 """
@@ -64,37 +245,15 @@ function sequential_write(
         aligned = Val(true),
     ) where {T, N}
 
-    unroll = 4
-
-    # Make sure we can successfully chunk up this array into SIMD sizes
-    @assert iszero(mod(length(A), unroll * N))
-
-    # If we've passed alignment flags, make sure the base pointer of this array is in fact
-    # aligned correctly.
-    if aligned == Val{true}()
-        @assert iszero(mod(Int(pointer(A)), sizeof(T) * N))
-    end
-
-    # We need to do some schenanigans to get LLVM to emit the correct code.
-    # Just doing something like
-    #    vstore(s, pointer(A, i),         aligned, nontemporal)
-    #    vstore(s, pointer(A, i + N),     aligned, nontemporal)
-    #    vstore(s, pointer(A, i + 2 * N), aligned, nontemporal)
-    #    vstore(s, pointer(A, i + 3 * N), aligned, nontemporal)
-    #
-    # Results in spurious `mov` instructions between the vector stores for pointer
-    # conversions, even though these are really not needed.
-    #
-    # Instead, we perform the pointer arithmetic manually.
-    s = Vec{N,T}(one(T))
-    base = pointer(A)
-    @inbounds for i in 0:(unroll*N):(length(A) - 1)
-        vstore(s, base + sizeof(T) * i,           aligned, nontemporal)
-        vstore(s, base + sizeof(T) * (i + N),     aligned, nontemporal)
-        vstore(s, base + sizeof(T) * (i + (2*N)), aligned, nontemporal)
-        vstore(s, base + sizeof(T) * (i + (3*N)), aligned, nontemporal)
-    end
-    return nothing
+    kp = KernelParam(;
+        kernel = WriteOnly,
+        storetype = nontemporal == Val(true) ? Nontemporal : Standard,
+        eltype = T,
+        iterator = Sequential,
+        vectorsize = N,
+        unroll = 4
+    )
+    return execute!(A, kp)
 end
 
 """
@@ -113,36 +272,16 @@ function sequential_readwrite(
         aligned = Val(true),
     ) where {T, N}
 
-    unroll = 4
-
-    # Make sure we can successfully chunk up this array into SIMD sizes
-    @assert iszero(mod(length(A), unroll * N))
-
-    # If we've passed alignment flags, make sure the base pointer of this array is in fact
-    # aligned correctly.
-    if aligned == Val{true}()
-        @assert iszero(mod(Int(pointer(A)), sizeof(T) * N))
-    end
-
-    s = Vec{N,T}(one(T))
-    base = pointer(A)
-    @inbounds for i in 0:(unroll*N):(length(A) - 1)
-        _v1 = vload(Vec{N,T}, base + sizeof(T) * i,           aligned, nontemporal)
-        _v2 = vload(Vec{N,T}, base + sizeof(T) * (i + N),     aligned, nontemporal)
-        _v3 = vload(Vec{N,T}, base + sizeof(T) * (i + (2*N)), aligned, nontemporal)
-        _v4 = vload(Vec{N,T}, base + sizeof(T) * (i + (3*N)), aligned, nontemporal)
-
-        _u1 = _v1 + s
-        _u2 = _v2 + s
-        _u3 = _v3 + s
-        _u4 = _v4 + s
-
-        vstore(_u1, base + sizeof(T) * i,           aligned, nontemporal)
-        vstore(_u2, base + sizeof(T) * (i + N),     aligned, nontemporal)
-        vstore(_u3, base + sizeof(T) * (i + (2*N)), aligned, nontemporal)
-        vstore(_u4, base + sizeof(T) * (i + (3*N)), aligned, nontemporal)
-    end
-    return nothing
+    kp = KernelParam(;
+        kernel = ReadWrite,
+        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
+        storetype = nontemporal == Val(true) ? Nontemporal : Standard,
+        eltype = T,
+        iterator = Sequential,
+        vectorsize = N,
+        unroll = 4,
+    )
+    return execute!(A, kp)
 end
 
 #####
@@ -163,60 +302,18 @@ function random_read(
         ::Val{N},
         nontemporal = Val(false),
         aligned = Val(true),
-        unroll = Val(1),
-    ) where {T,N}
+        unroll::Val{U} = Val(1),
+    ) where {T,N,U}
 
-    # Wrap the array in "Vec" elements.
-    # This really becomes a no-op, but is helpful for not having to deal with it in the
-    # inner kernel.
-    return random_read(reinterpret(Vec{N,T}, A), nontemporal, aligned, unroll)
-end
-
-function random_read(
-        A::AbstractArray{T},
-        nontemporal::Val{N} = Val(false),
-        aligned = Val(true),
-        u::Val{unroll} = Val(1),
-    ) where {T <: Vec, N, unroll}
-
-    # Make sure we can the length of the array is a multiple of the unroll factor
-    if !iszero(mod(length(A), unroll))
-        error("Length of `A` must be a multiple of the unroll factor $unroll")
-    end
-
-    # Construct a LFSR
-    lfsr = MaxLFSR.LFSR(div(length(A), unroll))
-    return random_read(A, lfsr, nontemporal, aligned, u)
-end
-
-@generated function random_read(
-        A::AbstractArray{Vec{N,T}},
-        lfsr::LFSR,
-        nontemporal = Val(false),
-        aligned = Val(true),
-        ::Val{unroll} = Val(1),
-    ) where {N,T,unroll}
-
-    syms = [Symbol("v$i") for i in 1:unroll]
-
-    loads = map(1:unroll) do i
-        lhs = syms[i]
-        return :($lhs = vload(Vec{$N,$T}, ptr + $(sizeof(Vec{N,T}) * (i-1)), aligned, nontemporal))
-    end
-
-    # Need to manually check if length is 1 for better codegen.
-    reduction = length(syms) == 1 ? :(s += $(syms[1])) : :(s += +($(syms...)))
-
-    return quote
-        s = zero(eltype(A))
-        base = Base.unsafe_convert(Ptr{T}, pointer(A))
-        @inbounds for i in lfsr
-            ptr = base + $(unroll * sizeof(eltype(A))) * (i-1)
-            $(loads...)
-            $reduction
-        end
-        return s
-    end
+    kp = KernelParam(;
+        kernel = ReadOnly,
+        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
+        eltype = T,
+        iterator = PseudoRandom,
+        vectorsize = N,
+        unroll = U,
+    )
+    return execute!(A, kp)
 end
 
 """
@@ -233,50 +330,18 @@ function random_write(
         ::Val{N},
         nontemporal = Val{false}(),
         aligned = Val(true),
-        unroll = Val(1),
-    ) where {T,N}
+        unroll::Val{U} = Val(1),
+    ) where {T,N,U}
 
-    return random_write(reinterpret(Vec{N,T}, A), nontemporal, aligned, unroll)
-end
-
-function random_write(
-        A::AbstractArray{T},
-        nontemporal::Val{N} = Val{false}(),
-        aligned = Val(true),
-        u::Val{unroll} = Val(1),
-    ) where {T <: Vec, N, unroll}
-
-    # Make sure we can the length of the array is a multiple of the unroll factor
-    if !iszero(mod(length(A), unroll))
-        error("Length of `A` must be a multiple of the unroll factor $unroll")
-    end
-
-    # Construct a LFSR
-    lfsr = MaxLFSR.LFSR(div(length(A), unroll))
-    return random_write(A, lfsr, nontemporal, aligned, u)
-end
-
-@generated function random_write(
-        A::AbstractArray{Vec{N,T}},
-        lfsr::LFSR,
-        nontemporal = Val(false),
-        aligned = Val(true),
-        ::Val{unroll} = Val(1),
-    ) where {N,T,unroll}
-
-    stores = map(1:unroll) do i
-        :(vstore(s, ptr + $(sizeof(Vec{N,T}) * (i-1)), aligned, nontemporal))
-    end
-
-    return quote
-        s = one(eltype(A))
-        base = Base.unsafe_convert(Ptr{T}, pointer(A))
-        @inbounds for i in lfsr
-            ptr = base + $(unroll * sizeof(Vec{N,T})) * (i-1)
-            $(stores...)
-        end
-        return nothing
-    end
+    kp = KernelParam(;
+        kernel = WriteOnly,
+        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
+        eltype = T,
+        iterator = PseudoRandom,
+        vectorsize = N,
+        unroll = U,
+    )
+    return execute!(A, kp)
 end
 
 """
@@ -293,106 +358,17 @@ function random_readwrite(
         ::Val{N},
         nontemporal = Val(false),
         aligned = Val(true),
-        unroll = Val(1),
-    ) where {T,N}
+        unroll::Val{U} = Val(1),
+    ) where {T,N,U}
 
-    return random_readwrite(reinterpret(Vec{N,T}, A), nontemporal, aligned, unroll)
+    kp = KernelParam(;
+        kernel = ReadWrite,
+        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
+        eltype = T,
+        iterator = PseudoRandom,
+        vectorsize = N,
+        unroll = U,
+    )
+    return execute!(A, kp)
 end
 
-function random_readwrite(
-        A::AbstractArray{T},
-        nontemporal::Val{N} = Val(false),
-        aligned = Val(true),
-        u::Val{unroll} = Val(1),
-    ) where {T <: Vec, N, unroll}
-
-    # Make sure we can the length of the array is a multiple of the unroll factor
-    if !iszero(mod(length(A), unroll))
-        error("Length of `A` must be a multiple of the unroll factor $unroll")
-    end
-
-    # Construct a LFSR
-    lfsr = MaxLFSR.LFSR(div(length(A), unroll))
-    return random_readwrite(A, lfsr, nontemporal, aligned, u)
-end
-
-@generated function random_readwrite(
-        A::AbstractArray{Vec{N,T}},
-        lfsr::LFSR,
-        nontemporal = Val(false),
-        aligned = Val(true),
-        ::Val{unroll} = Val(1),
-    ) where {N,T,unroll}
-
-    o = one(Vec{N,T})
-    syms = [Symbol("v$i") for i in 1:unroll]
-    loads = map(1:unroll) do i
-        lhs = syms[i]
-        shift = sizeof(Vec{N,T}) * (i-1)
-        return :($lhs = vload(Vec{$N,$T}, ptr + $shift, aligned, nontemporal))
-    end
-
-    stores = map(1:unroll) do i
-        v = syms[i]
-        shift = sizeof(Vec{N,T}) * (i-1)
-        return :(vstore($v+$o, ptr + $shift, aligned, nontemporal))
-    end
-
-    return quote
-        base = Base.unsafe_convert(Ptr{T}, pointer(A))
-        @inbounds for i in lfsr
-            ptr = base + $(unroll * sizeof(Vec{N,T})) * (i-1)
-            $(loads...)
-            $(stores...)
-        end
-    end
-end
-
-#####
-##### Streamed copy from A to B
-#####
-
-function sequential_copy!(
-        A::AbstractArray{T},
-        B::AbstractArray{T},
-        valn::Val{N}
-    ) where {T, N}
-
-    unroll = 4
-
-    # Alignment and size checking
-    @assert iszero(mod(length(A), unroll * N))
-    @assert iszero(mod(Int(pointer(A)), sizeof(T) * N))
-    @assert iszero(mod(Int(pointer(B)), sizeof(T) * N))
-
-    # Forward to the one without bounds checking so we can checkout out the generated
-    # code more easily.
-    return unsafe_sequential_copy!(A, B, valn)
-end
-
-function unsafe_sequential_copy!(
-        A::AbstractArray{T},
-        B::AbstractArray{T},
-        ::Val{N}
-    ) where {N,T}
-
-    # These are streaming stores after all.
-    unroll = 4
-    aligned = Val{true}()
-    nontemporal = Val{true}()
-
-    # Again, this pointer arithmetic thing seems to be necessary to get the best native code.
-    pa = pointer(A)
-    pb = pointer(B)
-    @inbounds for i in 0:(unroll*N):(length(A) - 1)
-        _v1 = vload(Vec{N,T}, pb + sizeof(T) * i,           aligned, nontemporal)
-        _v2 = vload(Vec{N,T}, pb + sizeof(T) * (i + N),     aligned, nontemporal)
-        _v3 = vload(Vec{N,T}, pb + sizeof(T) * (i + (2*N)), aligned, nontemporal)
-        _v4 = vload(Vec{N,T}, pb + sizeof(T) * (i + (3*N)), aligned, nontemporal)
-
-        vstore(_v1, pa + sizeof(T) * i,           aligned, nontemporal)
-        vstore(_v2, pa + sizeof(T) * (i + N),     aligned, nontemporal)
-        vstore(_v3, pa + sizeof(T) * (i + (2*N)), aligned, nontemporal)
-        vstore(_v4, pa + sizeof(T) * (i + (3*N)), aligned, nontemporal)
-    end
-end

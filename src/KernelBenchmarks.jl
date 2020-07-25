@@ -1,5 +1,21 @@
 module KernelBenchmarks
 
+export  KernelParam,
+        # kernel types
+        ReadOnly,
+        WriteOnly,
+        ReadWrite,
+        # load/store types
+        Standard,
+        Nontemporal,
+        # itertors
+        Sequential,
+        PseudoRandom,
+        # exported function
+        execute!,
+        # interactive
+        introspect
+
 ##### stdlib
 using InteractiveUtils
 import REPL
@@ -18,6 +34,5 @@ using SIMD
 include("threaded.jl")
 include("kernels.jl")
 include("introspection.jl")
-include("updated.jl")
 
 end # module
