@@ -111,6 +111,8 @@ makeitr(A, ::Type{PseudoRandom}, unroll) = MaxLFSR.LFSR(div(length(A), unroll))
 end
 
 function emit(A::Type{<:AbstractArray{Vec{N,T}}}, K::Type{<:KernelParam}) where {N,T}
+    @nospecialize
+
     # Get the header, body, and footer for this kernel
     header, body, footer = hbf(A, K)
 
@@ -128,6 +130,8 @@ end
 
 # header, body, footer
 function hbf(::Type{<:AbstractArray{Vec{N,T}}}, K::Type{<:KernelParam}) where {N,T}
+    @nospecialize
+
     # Check invariants
     @assert N == vectorsize(K)
     @assert T == eltype(K)
@@ -193,6 +197,10 @@ function emit_stores(vectype::Type{<:Vec}, unroll, storetype, follows_load::Bool
         return :(vstore($vec, ptr + $shift, Val{true}(), $(lower(storetype))))
     end
 end
+
+############################################################################################
+# Legacy
+############################################################################################
 
 #####
 ##### Sequential Access Kernels

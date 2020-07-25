@@ -25,6 +25,8 @@ end
 TraceMeta() = TraceMeta(Any[], Any[])
 
 function pointercheck(pointers, vectype, unroll, iter, A)
+    @nospecialize
+
     # Are all pointers unique?
     @test allunique(pointers)
 
@@ -108,7 +110,8 @@ end
         V = eltype == Float32 ? A : B
 
         # Get a record of all the stores
-        ctx = TraceCtx(metadata = TraceMeta())
+        # Disable pre/post hooks to try to get faster compile times.
+        ctx = Cassette.disablehooks(TraceCtx(metadata = TraceMeta()))
         Cassette.overdub(ctx, KernelBenchmarks.execute!, V, kp)
         trace = ctx.metadata
 
