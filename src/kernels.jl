@@ -14,6 +14,47 @@ abstract type AbstractIterationStyle end
 struct Sequential <: AbstractIterationStyle end
 struct PseudoRandom <: AbstractIterationStyle end
 
+"""
+    KernelParam{K,L,S,I,T,N,U}
+
+Top level type governing the creation of a microbenchmark kernel.
+Construct using Keywords:
+
+    KernelParam(; [kw...])
+
+The available keywords are:
+
+* `kernel`: Controls the read/write behavior of the kernel. Options are:
+    - `ReadOnly`: Only generate loads.
+    - `WriteOnly`: Only generate stores.
+    - `ReadWrite`: Generate a load followed by a store.
+    Default: `ReadOnly`
+
+* `loadtype`: Controls whether standard or nontemporal loads are emitted. Options are:
+    - `Standard`: Use standard loads.
+    - `Nontemporal`: Use nontemporal loads.
+    Default: `Standard`
+
+* `storetype`: Controls whether standard or nontemporal stores are emitter. Options are:
+    - `Standard`: Use standard stores.
+    - `Nontemporal`: Use nontemporal stores.
+    Default: `Standard`
+
+* `iterator`: Controls how the underlying array is accessed. Optiosn are:
+    - `Sequential`: Touch every index sequentially.
+    - `PseudoRandom`: Use a MaxLFSR to touch each index in a pseudo-random order.
+    Default: `Sequential`
+
+* `eltype`: The element type of the underlying array. Default: `Float32`.
+
+* `vectorsize`: The size of the vector to use. This determines whether 128 bit, 256 bit,
+    or 512 bit vector instructions are used. The default is `16` to enable AVX512
+    instructions for `Float32` entries.
+
+* `unroll`: The number of times the innermost load/store operation is performed.
+    Especially useful for the pseudo-random benchmarks to get read/write granularity larger
+    than 64 B. Default: `1`.
+"""
 struct KernelParam{
         # Kernel Type
         K <: AbstractKernelType,
@@ -74,13 +115,23 @@ unroll(K::KernelParam) = unroll(typeof(K))
 # The upper level functions reinterpret the top level array as an array of `Vec` elements.
 # Performs alignment checking and length checking.
 # Constructs the iterator
+"""
+    execute!(A::AbstractVector, K::KernelParam)
+
+Run the kernel described by `K` on `A`.
+The following restrictions apply to `K`:
+
+* `eltype(A) == eltype(K)`
+* `A` must be aligned to 64 bytes (i.e., aligned to a cache line)
+* The lengthh of `A` must be a multiple of `unroll * vectorsize * Treads.nthreads()`
+"""
 function execute!(A::AbstractVector, K::KernelParam)
     # Sanity check
     @assert eltype(A) == eltype(K)
     # Alignment check
     @assert iszero(mod(convert(Int, pointer(A)), 64))
     # Size check
-    @assert iszero(mod(length(A), unroll(K) * sizeof(eltype(K)) * vectorsize(K)))
+    @assert iszero(mod(length(A), unroll(K) * vectorsize(K)))
 
     V = reinterpret(K, A)
     itr = makeitr(V, K)
@@ -196,187 +247,5 @@ function emit_stores(vectype::Type{<:Vec}, unroll, storetype, follows_load::Bool
         vec = follows_load ? :($rhs + $o) : o
         return :(vstore($vec, ptr + $shift, Val{true}(), $(lower(storetype))))
     end
-end
-
-############################################################################################
-# Legacy
-############################################################################################
-
-#####
-##### Sequential Access Kernels
-#####
-
-# Conver things to 'Vals' that aren't already Vals
-val(x::Val) = x
-val(x) = Val(x)
-
-"""
-    sequential_read(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
-
-Perform a sequential read on the contents of `A` using vectors intrinsics of size `N`.
-
-Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are nontemporal and aligned,
-respectively.
-"""
-function sequential_read(
-        A::AbstractArray{T},
-        ::Val{N},
-        nontemporal = Val(false),
-        aligned = Val(true),
-    ) where {T, N}
-
-    kp = KernelParam(;
-        kernel = ReadOnly,
-        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
-        eltype = T,
-        iterator = Sequential,
-        vectorsize = N,
-        unroll = 4
-    )
-    return execute!(A, kp)
-end
-
-"""
-    sequential_write(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
-
-Perform a sequential read on the contents of `A` using vectors intrinsics of size `N`.
-
-Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are nontemporal and aligned,
-respectively.
-"""
-function sequential_write(
-        A::AbstractArray{T},
-        ::Val{N},
-        nontemporal = Val(false),
-        aligned = Val(true),
-    ) where {T, N}
-
-    kp = KernelParam(;
-        kernel = WriteOnly,
-        storetype = nontemporal == Val(true) ? Nontemporal : Standard,
-        eltype = T,
-        iterator = Sequential,
-        vectorsize = N,
-        unroll = 4
-    )
-    return execute!(A, kp)
-end
-
-"""
-    sequential_readwrite(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
-
-Perform a sequential read on the contents of `A` using vectors intrinsics of size `N`.
-
-Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are nontemporal and aligned,
-respectively.
-"""
-function sequential_readwrite(
-        A::AbstractArray{T},
-        ::Val{N},
-        nontemporal = Val(false),
-        aligned = Val(true),
-    ) where {T, N}
-
-    kp = KernelParam(;
-        kernel = ReadWrite,
-        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
-        storetype = nontemporal == Val(true) ? Nontemporal : Standard,
-        eltype = T,
-        iterator = Sequential,
-        vectorsize = N,
-        unroll = 4,
-    )
-    return execute!(A, kp)
-end
-
-#####
-##### Random Access Kernels
-#####
-
-"""
-    random_read(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
-
-Perform a random read on the contents of `A` using vectors intrinsics of size `N`.
-
-Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are nontemporal and aligned,
-respectively.
-"""
-function random_read(
-        A::AbstractArray{T},
-        ::Val{N},
-        nontemporal = Val(false),
-        aligned = Val(true),
-        unroll::Val{U} = Val(1),
-    ) where {T,N,U}
-
-    kp = KernelParam(;
-        kernel = ReadOnly,
-        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
-        eltype = T,
-        iterator = PseudoRandom,
-        vectorsize = N,
-        unroll = U,
-    )
-    return execute!(A, kp)
-end
-
-"""
-    random_write(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
-
-Perform a random read on the contents of `A` using vectors intrinsics of size `N`.
-
-Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are nontemporal and aligned,
-respectively.
-"""
-function random_write(
-        A::AbstractArray{T},
-        ::Val{N},
-        nontemporal = Val{false}(),
-        aligned = Val(true),
-        unroll::Val{U} = Val(1),
-    ) where {T,N,U}
-
-    kp = KernelParam(;
-        kernel = WriteOnly,
-        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
-        eltype = T,
-        iterator = PseudoRandom,
-        vectorsize = N,
-        unroll = U,
-    )
-    return execute!(A, kp)
-end
-
-"""
-    random_readwrite(A::AbstractArray, ::Val{N}, [nontemporal = Val(false), aligned = Val(true)]
-
-Perform a random read on the contents of `A` using vectors intrinsics of size `N`.
-
-Optional arguments `nontemporal` and `aligned` should be passes as `Val{True}()` or
-`Val{False}()` and control if the vector instructions are nontemporal and aligned,
-respectively.
-"""
-function random_readwrite(
-        A::AbstractArray{T},
-        ::Val{N},
-        nontemporal = Val(false),
-        aligned = Val(true),
-        unroll::Val{U} = Val(1),
-    ) where {T,N,U}
-
-    kp = KernelParam(;
-        kernel = ReadWrite,
-        loadtype = nontemporal == Val(true) ? Nontemporal : Standard,
-        eltype = T,
-        iterator = PseudoRandom,
-        vectorsize = N,
-        unroll = U,
-    )
-    return execute!(A, kp)
 end
 

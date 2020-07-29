@@ -34,5 +34,6 @@ using SIMD
 include("threaded.jl")
 include("kernels.jl")
 include("introspection.jl")
+include("deprecated.jl")
 
 end # module
