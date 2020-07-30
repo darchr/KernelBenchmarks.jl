@@ -37,15 +37,15 @@ numactl --physcpubind=0-23 --membind=0 <path/to/julia>
 **NOTE**: In order for `numactl` to work correctly, you must be using Julia 1.4.0-rc2 or greater.
 This is because Julia 1.3 has legacy code in it that nukes CPU affinity during initialization.
 
-Kernels
+Usage
 -------
 
-## Step 1 - Build yourself an Array
+#### Step 1 - Build yourself an Array
 ```julia
 A = rand(Float32, 2^20 * Threads.nthreads());
 ```
 
-## Step 2 - Select your kernel parameters
+#### Step 2 - Select your kernel parameters
 
 ```julia
 KernelParam{K,L,S,I,T,N,U}
@@ -102,7 +102,7 @@ K = KernelParam(
 )
 ```
 
-## Step 3 - Run
+#### Step 3 - Run
 Running kernels is as simple as calling `execute!`:
 ```julia
 execute!(A::AbstractVector, K::KernelParam)
@@ -114,7 +114,7 @@ The following restrictions apply to `K`:
 * `A` must be aligned to 64 bytes (i.e., aligned to a cache line)
 * The lengthh of `A` must be a multiple of `unroll * vectorsize * Treads.nthreads()`
 
-## Step 4 - Multithread
+#### Step 4 - Multithread
 
 If you want to parallelize the kernel across multiple threads, uses `KernelBenchmarks.threaded`
 ```
@@ -122,7 +122,7 @@ KernelBenchmarks.threaded(execute!, A, K)
 ```
 
 Examples
-----
+--------
 Suppose we want to measure the sequential read and write bandwidth of a system, comparing standard loads/stores with nontemporal loads/stores.
 We can do that as follows:
 ```julia
