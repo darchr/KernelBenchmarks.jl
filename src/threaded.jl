@@ -16,7 +16,7 @@ function threaded(f, A::AbstractArray, args...; iterations = 1, nthreads = Threa
     @assert iszero(mod(length(A), nthreads))
 
     step = div(length(A), nthreads)
-    Threads.@threads for i in 1:Threads.nthreads()
+    Threads.@threads for i in 1:nthreads
         start = step * (i-1) + 1
         stop = step * i
         x = view(A, start:stop)

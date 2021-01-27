@@ -69,7 +69,9 @@ struct KernelParam{
         # Vector Width (bytes)
         N,
         # Unroll factor
-        U
+        U,
+        # Loop over unrolled code
+        O,
     }
 
     function KernelParam(;
@@ -79,34 +81,38 @@ struct KernelParam{
             iterator = Sequential,
             eltype = Float32,
             vectorsize = 8,
-            unroll = 1
+            unroll = 1,
+            loops = 1,
         )
 
-        return new{kernel,loadtype,storetype,iterator,eltype,vectorsize,unroll}()
+        return new{kernel,loadtype,storetype,iterator,eltype,vectorsize,unroll,loops}()
     end
 end
 
 # Convenience accessors
-kernel(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = K
+kernel(::Type{KernelParam{K,L,S,I,T,N,U,O}}) where {K,L,S,I,T,N,U,O} = K
 kernel(K::KernelParam) = kernel(typeof(K))
 
-loadtype(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = L
+loadtype(::Type{KernelParam{K,L,S,I,T,N,U,O}}) where {K,L,S,I,T,N,U,O} = L
 loadtype(K::KernelParam) = loadtype(typeof(K))
 
-storetype(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = S
+storetype(::Type{KernelParam{K,L,S,I,T,N,U,O}}) where {K,L,S,I,T,N,U,O} = S
 storetype(K::KernelParam) = storetype(typeof(K))
 
-iterator(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = I
+iterator(::Type{KernelParam{K,L,S,I,T,N,U,O}}) where {K,L,S,I,T,N,U,O} = I
 iterator(K::KernelParam) = iterator(typeof(K))
 
-Base.eltype(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = T
+Base.eltype(::Type{KernelParam{K,L,S,I,T,N,U,O}}) where {K,L,S,I,T,N,U,O} = T
 Base.eltype(K::KernelParam) = eltype(typeof(K))
 
-vectorsize(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = N
+vectorsize(::Type{KernelParam{K,L,S,I,T,N,U,O}}) where {K,L,S,I,T,N,U,O} = N
 vectorsize(K::KernelParam) = vectorsize(typeof(K))
 
-unroll(::Type{KernelParam{K,L,S,I,T,N,U}}) where {K,L,S,I,T,N,U} = U
+unroll(::Type{KernelParam{K,L,S,I,T,N,U,O}}) where {K,L,S,I,T,N,U,O} = U
 unroll(K::KernelParam) = unroll(typeof(K))
+
+loops(::Type{KernelParam{K,L,S,I,T,N,U,O}}) where {K,L,S,I,T,N,U,O} = O
+loops(K::KernelParam) = loops(typeof(K))
 
 #####
 ##### Upper level handling
@@ -143,10 +149,10 @@ end
 Base.reinterpret(K::KernelParam, A::AbstractArray) = reinterpret(Vec{vectorsize(K),eltype(K)}, A)
 
 # iterators
-makeitr(A, K::KernelParam) = makeitr(A, iterator(K), unroll(K))
+makeitr(A, K::KernelParam) = makeitr(A, iterator(K), unroll(K), loops(K))
 
-makeitr(A, ::Type{Sequential}, unroll) = 1:div(length(A), unroll)
-makeitr(A, ::Type{PseudoRandom}, unroll) = MaxLFSR.LFSR(div(length(A), unroll))
+makeitr(A, ::Type{Sequential}, unroll, loops) = 1:div(length(A), unroll * loops)
+makeitr(A, ::Type{PseudoRandom}, unroll, loops) = MaxLFSR.LFSR(div(length(A), unroll * loops))
 
 #####
 ##### Generate the kernel
@@ -166,14 +172,17 @@ function emit(A::Type{<:AbstractArray{Vec{N,T}}}, K::Type{<:KernelParam}) where 
 
     # Get the header, body, and footer for this kernel
     header, body, footer = hbf(A, K)
+    nloops = loops(K)
 
     # Emit the rest of the function
     return quote
         $(header...)
         base = Base.unsafe_convert(Ptr{$T}, pointer(A))
         @inbounds for i in itr
-            ptr = base + $(unroll(K) * sizeof(Vec{N,T})) * (i-1)
-            $(body...)
+            for j in 1:$(nloops)
+                ptr = base + $(unroll(K) * sizeof(Vec{N,T})) * ($nloops * (i-1) + (j-1))
+                $(body...)
+            end
         end
         $(footer...)
     end
@@ -232,7 +241,7 @@ function emit_loads(vectype::Type{<:Vec}, unroll, loadtype)
     return map(1:unroll) do i
         lhs = syms[i]
         shift = sizeof(vectype) * (i-1)
-        return :($lhs = vload($vectype, ptr + $shift, Val{true}(), $(lower(loadtype))))
+        return :($lhs = vload($vectype, ptr + $shift, nothing, Val{true}(), $(lower(loadtype))))
     end
 end
 
@@ -245,7 +254,7 @@ function emit_stores(vectype::Type{<:Vec}, unroll, storetype, follows_load::Bool
         rhs = syms[i]
         shift = sizeof(vectype) * (i-1)
         vec = follows_load ? :($rhs + $o) : o
-        return :(vstore($vec, ptr + $shift, Val{true}(), $(lower(storetype))))
+        return :(vstore($vec, ptr + $shift, nothing, Val{true}(), $(lower(storetype))))
     end
 end
 
